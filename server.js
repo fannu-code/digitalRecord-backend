@@ -13,7 +13,20 @@ const app = express();
 connectDB();
 
 // Middleware
-app.use(cors());
+app.use(
+  cors({
+    origin: "https://kemu-digital-record.vercel.app/",
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    credentials: true,
+  }),
+);
+
+app.use(
+  express.urlencoded({
+    extended: true,
+  }),
+);
+
 app.use(express.json());
 
 // Routes
