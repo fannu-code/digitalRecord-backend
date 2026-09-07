@@ -20,7 +20,19 @@ const recordSchema = new mongoose.Schema(
       required: true,
     },
 
-    document: {
+    // Cloudinary secure URL
+    documentUrl: {
+      type: String,
+      required: true,
+    },
+
+    // Cloudinary public ID
+    cloudinaryPublicId: {
+      type: String,
+      required: true,
+    },
+
+    cloudinaryResourceType: {
       type: String,
       required: true,
     },
