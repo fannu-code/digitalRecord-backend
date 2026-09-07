@@ -27,6 +27,16 @@ app.use(
   }),
 );
 
+app.use(
+  "/uploads",
+  express.static("uploads", {
+    setHeaders: (res) => {
+      res.set("Access-Control-Allow-Origin", "*");
+    },
+  }),
+);
+
+
 app.use(express.json());
 
 // Routes
