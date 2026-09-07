@@ -3,6 +3,7 @@ const express = require("express");
 const {
   submitRecord,
   searchRecord,
+  getAvailableYears,
   downloadDocument,
   deleteRecord
 } = require("../controllers/recordController");
@@ -38,6 +39,11 @@ router.post(
 // /api/records/search?dairyNo=729/ADMIN/KEMU
 // =================================
 router.get("/search", protect, searchRecord);
+
+// =================================
+// GET AVAILABLE YEARS
+// =================================
+router.get("/years", protect, getAvailableYears);
 
 // =================================
 // DOWNLOAD DOCUMENT

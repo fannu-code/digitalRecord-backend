@@ -9,6 +9,12 @@ const recordSchema = new mongoose.Schema(
       trim: true,
     },
 
+    documentName: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
     date: {
       type: Date,
       required: true,

@@ -1,10 +1,34 @@
 [
   {
-    "code": "ADMIN2026",
+    "code": "ADMIN2203",
     "role": "admin"
   },
   {
-    "code": "USER2026",
+    "code": "ADMIN2204",
+    "role": "admin"
+  },
+  {
+    "code": "ADMIN2205",
+    "role": "admin"
+  },
+  {
+    "code": "ADMIN2206",
+    "role": "admin"
+  },
+  {
+    "code": "USER2201",
+    "role": "user"
+  },
+  {
+    "code": "USER2202",
+    "role": "user"
+  },
+  {
+    "code": "USER2203",
+    "role": "user"
+  },
+  {
+    "code": "USER2204",
     "role": "user"
   }
 ]
