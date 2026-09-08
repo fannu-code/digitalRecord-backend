@@ -429,16 +429,16 @@ const sanitizeFileName = (fileName) => {
     .substring(0, 200);
 };
 
-// =============================================
+// =================================
 // DOWNLOAD DOCUMENT
-// =============================================
+// =================================
 const downloadDocument = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // =============================================
+    // =================================
     // FIND RECORD
-    // =============================================
+    // =================================
     const record = await Record.findById(id);
 
     if (!record) {
@@ -447,116 +447,171 @@ const downloadDocument = async (req, res) => {
       });
     }
 
-    // =============================================
+    // =================================
     // CHECK CLOUDINARY PUBLIC ID
-    // =============================================
+    // =================================
     if (!record.cloudinaryPublicId) {
       return res.status(404).json({
-        message: "Cloudinary document ID not found.",
+        message: "Cloudinary document information not found.",
       });
     }
 
-    // =============================================
-    // FILE INFORMATION
-    // =============================================
+    console.log("Starting document download:", {
+      recordId: record._id.toString(),
+      fileName: record.originalFileName,
+      publicId: record.cloudinaryPublicId,
+      resourceType: record.cloudinaryResourceType,
+      documentType: record.documentType,
+      fileExtension: record.fileExtension,
+    });
+
+    // =================================
+    // DETERMINE RESOURCE TYPE
+    // =================================
+    const resourceType = record.cloudinaryResourceType || "raw";
+
+    // =================================
+    // GENERATE CLOUDINARY URL
+    //
+    // IMPORTANT:
+    // Do NOT manually append the file extension
+    // to cloudinaryPublicId.
+    // =================================
+    let downloadUrl;
+
+    if (resourceType === "raw") {
+      // =================================
+      // RAW FILES
+      //
+      // PDF
+      // DOC / DOCX
+      // XLS / XLSX
+      // PPT / PPTX
+      // ZIP / RAR / 7Z
+      // TXT / CSV / RTF
+      // =================================
+      downloadUrl = cloudinary.url(record.cloudinaryPublicId, {
+        resource_type: "raw",
+        type: "upload",
+        secure: true,
+      });
+    } else {
+      // =================================
+      // IMAGE / VIDEO FILES
+      // =================================
+      downloadUrl = cloudinary.url(record.cloudinaryPublicId, {
+        resource_type: resourceType,
+        type: "upload",
+        secure: true,
+      });
+    }
+
+    console.log("Generated Cloudinary URL:", downloadUrl);
+
+    // =================================
+    // REQUEST FILE FROM CLOUDINARY
+    // =================================
+    const cloudinaryResponse = await axios.get(downloadUrl, {
+      responseType: "stream",
+      timeout: 120000,
+      maxRedirects: 5,
+      validateStatus: (status) => status >= 200 && status < 300,
+    });
+
+    // =================================
+    // SAFE FILE NAME
+    // =================================
     const safeFileName = sanitizeFileName(
       record.originalFileName || "document",
     );
 
-    const contentType = record.documentType || "application/octet-stream";
+    // =================================
+    // CONTENT TYPE
+    // =================================
+    const contentType =
+      record.documentType ||
+      cloudinaryResponse.headers["content-type"] ||
+      "application/octet-stream";
 
-    const resourceType = record.cloudinaryResourceType || "raw";
-
-    // =============================================
-    // GENERATE CLOUDINARY DELIVERY URL
-    // =============================================
-    //
-    // IMPORTANT:
-    //
-    // Cloudinary has different delivery paths:
-    //
-    // image -> /image/upload/
-    // video -> /video/upload/
-    // raw   -> /raw/upload/
-    //
-    // This is the key difference between
-    // images and files such as:
-    //
-    // PDF
-    // DOC
-    // DOCX
-    // XLS
-    // XLSX
-    // PPT
-    // PPTX
-    // ZIP
-    // RAR
-    // 7Z
-    // TXT
-    // RTF
-    //
-    const downloadUrl = cloudinary.url(record.cloudinaryPublicId, {
-      resource_type: resourceType,
-
-      type: "upload",
-
-      secure: true,
-
-      // Force browser download
-      flags: "attachment",
-
-      // Keep original extension when
-      // Cloudinary URL needs it.
-      format: record.fileExtension
-        ? record.fileExtension.replace(".", "")
-        : undefined,
-    });
-
-    console.log("Generated Cloudinary Download URL:", {
-      recordId: record._id.toString(),
-
-      fileName: record.originalFileName,
-
-      mimeType: record.documentType,
-
-      extension: record.fileExtension,
-
-      resourceType,
-
-      publicId: record.cloudinaryPublicId,
-
-      downloadUrl,
-    });
-
-    // =============================================
-    // SET RESPONSE HEADERS
-    // =============================================
     res.setHeader("Content-Type", contentType);
 
+    // =================================
+    // FORCE DOWNLOAD
+    // =================================
     res.setHeader(
       "Content-Disposition",
       `attachment; filename="${safeFileName}"`,
     );
 
+    // =================================
+    // CONTENT LENGTH
+    // =================================
+    const contentLength = cloudinaryResponse.headers["content-length"];
+
+    if (contentLength) {
+      res.setHeader("Content-Length", contentLength);
+    }
+
+    // =================================
+    // CACHE CONTROL
+    // =================================
     res.setHeader(
       "Cache-Control",
       "private, no-cache, no-store, must-revalidate",
     );
 
-    // =============================================
-    // REDIRECT TO CLOUDINARY
-    // =============================================
-    //
-    // Browser will download the file directly
-    // from Cloudinary.
-    //
-    return res.redirect(downloadUrl);
+    // =================================
+    // STREAM CLOUDINARY → BROWSER
+    // =================================
+    cloudinaryResponse.data.on("error", (streamError) => {
+      console.error("Cloudinary Stream Error:", streamError);
+
+      if (!res.headersSent) {
+        return res.status(500).json({
+          message: "Error while streaming document.",
+        });
+      }
+
+      res.destroy(streamError);
+    });
+
+    cloudinaryResponse.data.pipe(res);
   } catch (error) {
     console.error("Download Document Error:", error);
 
-    // =============================================
+    // =================================
+    // CLOUDINARY / AXIOS ERROR
+    // =================================
+    if (error.response) {
+      console.error("Cloudinary Status:", error.response.status);
+
+      console.error("Cloudinary Headers:", error.response.headers);
+
+      if (!res.headersSent) {
+        return res.status(500).json({
+          message: "Unable to retrieve document from Cloudinary.",
+        });
+      }
+
+      return;
+    }
+
+    // =================================
+    // TIMEOUT
+    // =================================
+    if (error.code === "ECONNABORTED") {
+      if (!res.headersSent) {
+        return res.status(504).json({
+          message: "Document download timed out.",
+        });
+      }
+
+      return;
+    }
+
+    // =================================
     // GENERAL ERROR
-    // =============================================
+    // =================================
     if (!res.headersSent) {
       return res.status(500).json({
         message: "Server error while downloading document.",
