@@ -364,25 +364,9 @@ const sanitizeFileName = (fileName) => {
     .substring(0, 200);
 };
 
-/**
- * DOWNLOAD DOCUMENT
- *
- * The browser does NOT directly download from Cloudinary.
- *
- * Flow:
- *
- * React
- *   ↓
- * Express /download/:id
- *   ↓
- * MongoDB
- *   ↓
- * Cloudinary
- *   ↓
- * Express stream
- *   ↓
- * Browser download
- */
+// =================================
+// DOWNLOAD DOCUMENT
+// =================================
 const downloadDocument = async (req, res) => {
   try {
     const { id } = req.params;
@@ -398,46 +382,31 @@ const downloadDocument = async (req, res) => {
       });
     }
 
-    if (!record.cloudinaryPublicId) {
+    // =================================
+    // CHECK CLOUDINARY URL
+    // =================================
+    if (!record.documentUrl) {
       return res.status(404).json({
-        message: "Cloudinary document not found.",
+        message: "Document URL not found.",
       });
     }
 
-    // =================================
-    // CREATE CLOUDINARY DOWNLOAD URL
-    // =================================
-    const resourceType = record.cloudinaryResourceType || "raw";
-
-    const downloadUrl = cloudinary.url(record.cloudinaryPublicId, {
-      resource_type: resourceType,
-      secure: true,
-      flags: "attachment",
-      attachment: record.originalFileName || "document",
+    console.log("Starting document download:", {
+      recordId: record._id.toString(),
+      fileName: record.originalFileName,
+      documentUrl: record.documentUrl,
+      resourceType: record.cloudinaryResourceType,
     });
 
-    console.log("Cloudinary Download URL:", downloadUrl);
-
     // =================================
-    // GET FILE FROM CLOUDINARY
+    // REQUEST FILE FROM CLOUDINARY
     // =================================
-    const cloudinaryResponse = await axios({
-      method: "GET",
-      url: downloadUrl,
+    const cloudinaryResponse = await axios.get(record.documentUrl, {
       responseType: "stream",
       timeout: 120000,
       maxRedirects: 5,
+      validateStatus: (status) => status >= 200 && status < 300,
     });
-
-    // =================================
-    // CONTENT TYPE
-    // =================================
-    res.setHeader(
-      "Content-Type",
-      record.documentType ||
-        cloudinaryResponse.headers["content-type"] ||
-        "application/octet-stream",
-    );
 
     // =================================
     // FILE NAME
@@ -446,6 +415,19 @@ const downloadDocument = async (req, res) => {
       record.originalFileName || "document",
     );
 
+    // =================================
+    // CONTENT TYPE
+    // =================================
+    const contentType =
+      record.documentType ||
+      cloudinaryResponse.headers["content-type"] ||
+      "application/octet-stream";
+
+    res.setHeader("Content-Type", contentType);
+
+    // =================================
+    // FORCE DOWNLOAD
+    // =================================
     res.setHeader(
       "Content-Disposition",
       `attachment; filename="${safeFileName}"`,
@@ -454,11 +436,10 @@ const downloadDocument = async (req, res) => {
     // =================================
     // CONTENT LENGTH
     // =================================
-    if (cloudinaryResponse.headers["content-length"]) {
-      res.setHeader(
-        "Content-Length",
-        cloudinaryResponse.headers["content-length"],
-      );
+    const contentLength = cloudinaryResponse.headers["content-length"];
+
+    if (contentLength) {
+      res.setHeader("Content-Length", contentLength);
     }
 
     // =================================
@@ -470,14 +451,14 @@ const downloadDocument = async (req, res) => {
     );
 
     // =================================
-    // STREAM TO BROWSER
+    // STREAM CLOUDINARY → BROWSER
     // =================================
     cloudinaryResponse.data.on("error", (streamError) => {
-      console.error("Cloudinary Download Stream Error:", streamError);
+      console.error("Cloudinary Stream Error:", streamError);
 
       if (!res.headersSent) {
         return res.status(500).json({
-          message: "Error while downloading document.",
+          message: "Error while streaming document.",
         });
       }
 
@@ -488,18 +469,39 @@ const downloadDocument = async (req, res) => {
   } catch (error) {
     console.error("Download Document Error:", error);
 
+    // =================================
+    // CLOUDINARY / AXIOS ERROR
+    // =================================
     if (error.response) {
       console.error("Cloudinary Status:", error.response.status);
 
       console.error("Cloudinary Headers:", error.response.headers);
 
       if (!res.headersSent) {
-        return res.status(error.response.status).json({
-          message: "Unable to retrieve the document from Cloudinary.",
+        return res.status(error.response.status || 500).json({
+          message: "Unable to retrieve document from Cloudinary.",
         });
       }
+
+      return;
     }
 
+    // =================================
+    // TIMEOUT
+    // =================================
+    if (error.code === "ECONNABORTED") {
+      if (!res.headersSent) {
+        return res.status(504).json({
+          message: "Document download timed out.",
+        });
+      }
+
+      return;
+    }
+
+    // =================================
+    // GENERAL ERROR
+    // =================================
     if (!res.headersSent) {
       return res.status(500).json({
         message: "Server error while downloading document.",
