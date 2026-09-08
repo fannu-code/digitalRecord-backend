@@ -2,6 +2,7 @@ const path = require("path");
 const fs = require("fs");
 const Record = require("../models/Record");
 const cloudinary = require("../config/cloudinary");
+const axios = require("axios");
 
 // =================================
 // DELETE RECORD
