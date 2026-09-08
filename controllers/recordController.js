@@ -1,20 +1,17 @@
 const path = require("path");
-const fs = require("fs");
 const Record = require("../models/Record");
 const cloudinary = require("../config/cloudinary");
-const axios = require("axios");
 
-// =================================
+// =============================================
 // DELETE RECORD
-// =================================
+// =============================================
 const deleteRecord = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // =================================
+    // =============================================
     // FIND RECORD
-    // =================================
-
+    // =============================================
     const record = await Record.findById(id);
 
     if (!record) {
@@ -23,96 +20,138 @@ const deleteRecord = async (req, res) => {
       });
     }
 
-    // =================================
-    // DELETE FROM CLOUDINARY
-    // =================================
-
+    // =============================================
+    // DELETE FILE FROM CLOUDINARY
+    // =============================================
     if (record.cloudinaryPublicId) {
       try {
         await cloudinary.uploader.destroy(record.cloudinaryPublicId, {
-          resource_type: record.cloudinaryResourceType,
+          resource_type: record.cloudinaryResourceType || "raw",
         });
+
+        console.log("Cloudinary document deleted:", record.cloudinaryPublicId);
       } catch (cloudinaryError) {
         console.error("Cloudinary Delete Error:", cloudinaryError);
       }
     }
 
-    // =================================
-    // DELETE FROM MONGODB
-    // =================================
-
+    // =============================================
+    // DELETE RECORD FROM MONGODB
+    // =============================================
     await Record.findByIdAndDelete(id);
 
-    // =================================
+    // =============================================
     // RESPONSE
-    // =================================
-
-    res.status(200).json({
+    // =============================================
+    return res.status(200).json({
       message: "Record and document deleted successfully.",
     });
   } catch (error) {
     console.error("Delete Record Error:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       message: "Unable to delete the record.",
     });
   }
 };
 
-// =================================
+// =============================================
 // SUBMIT RECORD
-// =================================
+// =============================================
 const submitRecord = async (req, res) => {
   try {
     const { dairyNo, documentName, date } = req.body;
 
-    // =================================
+    // =============================================
     // VALIDATE FIELDS
-    // =================================
-
+    // =============================================
     if (!dairyNo || !documentName || !date) {
       return res.status(400).json({
-        message: "Dairy No, Document Name, and Date are required",
+        message: "Dairy No, Document Name, and Date are required.",
       });
     }
 
-    // =================================
+    // =============================================
     // VALIDATE FILE
-    // =================================
-
+    // =============================================
     if (!req.file) {
       return res.status(400).json({
-        message: "Document is required",
+        message: "Document is required.",
       });
     }
 
-    // =================================
+    // =============================================
     // CHECK DUPLICATE DAIRY NUMBER
-    // =================================
-
+    // =============================================
     const existingRecord = await Record.findOne({
       dairyNo: dairyNo.trim(),
     });
 
     if (existingRecord) {
       return res.status(400).json({
-        message: "A record with this Dairy No already exists",
+        message: "A record with this Dairy No already exists.",
       });
     }
 
-    // =================================
-    // UPLOAD TO CLOUDINARY
-    // =================================
+    // =============================================
+    // FILE INFORMATION
+    // =============================================
 
+    const originalFileName = req.file.originalname;
+
+    // Example:
+    // "annual-report.pdf"
+    // ".pdf"
+    const fileExtension = path.extname(originalFileName).toLowerCase();
+
+    // MIME / Content Type
+    //
+    // Examples:
+    // application/pdf
+    // image/jpeg
+    // application/zip
+    // application/vnd.openxmlformats-officedocument.wordprocessingml.document
+    //
+    const documentType = req.file.mimetype || "application/octet-stream";
+
+    // =============================================
+    // DETERMINE CLOUDINARY RESOURCE TYPE
+    // =============================================
+    //
+    // Cloudinary:
+    //
+    // Images -> image
+    // Videos -> video
+    // Other files -> raw
+    //
+    let cloudinaryResourceType = "raw";
+
+    if (documentType.startsWith("image/")) {
+      cloudinaryResourceType = "image";
+    } else if (documentType.startsWith("video/")) {
+      cloudinaryResourceType = "video";
+    }
+
+    // =============================================
+    // UPLOAD TO CLOUDINARY
+    // =============================================
     const uploadToCloudinary = () => {
       return new Promise((resolve, reject) => {
-        const stream = cloudinary.uploader.upload_stream(
+        const uploadStream = cloudinary.uploader.upload_stream(
           {
             folder: "kemu-digital-records",
-            resource_type: "auto",
+
+            // IMPORTANT:
+            // Images -> image
+            // Videos -> video
+            // Documents/archives -> raw
+            resource_type: cloudinaryResourceType,
+
+            // Let Cloudinary generate unique public ID
             use_filename: false,
             unique_filename: true,
           },
+
           (error, result) => {
             if (error) {
               reject(error);
@@ -122,16 +161,31 @@ const submitRecord = async (req, res) => {
           },
         );
 
-        stream.end(req.file.buffer);
+        uploadStream.end(req.file.buffer);
       });
     };
 
     const cloudinaryResult = await uploadToCloudinary();
 
-    // =================================
-    // SAVE RECORD IN MONGODB
-    // =================================
+    // =============================================
+    // VERIFY CLOUDINARY RESPONSE
+    // =============================================
+    if (!cloudinaryResult) {
+      return res.status(500).json({
+        message: "Cloudinary did not return an upload result.",
+      });
+    }
 
+    console.log("Cloudinary Upload Successful:", {
+      publicId: cloudinaryResult.public_id,
+      resourceType: cloudinaryResult.resource_type,
+      secureUrl: cloudinaryResult.secure_url,
+      format: cloudinaryResult.format,
+    });
+
+    // =============================================
+    // SAVE RECORD IN MONGODB
+    // =============================================
     const record = await Record.create({
       dairyNo: dairyNo.trim(),
 
@@ -139,84 +193,99 @@ const submitRecord = async (req, res) => {
 
       date,
 
+      // Cloudinary URL
       documentUrl: cloudinaryResult.secure_url,
 
+      // Cloudinary Public ID
       cloudinaryPublicId: cloudinaryResult.public_id,
 
-      cloudinaryResourceType: cloudinaryResult.resource_type,
+      // image / video / raw
+      cloudinaryResourceType:
+        cloudinaryResult.resource_type || cloudinaryResourceType,
 
-      originalFileName: req.file.originalname,
+      // Original file name
+      originalFileName,
 
-      documentType: req.file.mimetype,
+      // MIME / Content Type
+      documentType,
 
+      // File extension
+      fileExtension,
+
+      // User
       uploadedBy: req.user.id,
     });
 
-    // =================================
+    // =============================================
     // RESPONSE
-    // =================================
-
-    res.status(201).json({
-      message: "Record submitted successfully",
+    // =============================================
+    return res.status(201).json({
+      message: "Record submitted successfully.",
       record,
     });
   } catch (error) {
     console.error("Submit Record Error:", error);
 
-    res.status(500).json({
-      message: "Server error while submitting record",
+    // =============================================
+    // CLEANUP CLOUDINARY FILE IF DB SAVE FAILS
+    // =============================================
+    //
+    // If Cloudinary upload succeeded but MongoDB
+    // failed, try to remove the uploaded file.
+    //
+    if (error.cloudinaryPublicId && error.cloudinaryResourceType) {
+      try {
+        await cloudinary.uploader.destroy(error.cloudinaryPublicId, {
+          resource_type: error.cloudinaryResourceType,
+        });
+      } catch (cleanupError) {
+        console.error("Cloudinary Cleanup Error:", cleanupError);
+      }
+    }
+
+    return res.status(500).json({
+      message: "Server error while submitting record.",
     });
   }
 };
 
-// =================================
+// =============================================
 // SEARCH RECORDS
-//
-// Supported:
-//
-// Dairy No
-// Document Name
-// Year
-//
-// Or any combination:
-//
-// Dairy No + Document Name
-// Dairy No + Year
-// Document Name + Year
-// Dairy No + Document Name + Year
-// =================================
+// =============================================
 const searchRecord = async (req, res) => {
   try {
     const { dairyNo, documentName, year } = req.query;
 
     const cleanDairyNo = dairyNo?.trim();
+
     const cleanDocumentName = documentName?.trim();
+
     const cleanYear = year?.trim();
 
-    // =================================
+    // =============================================
     // VALIDATE SEARCH PARAMETERS
-    // =================================
+    // =============================================
     if (!cleanDairyNo && !cleanDocumentName && !cleanYear) {
       return res.status(400).json({
         message: "Please provide Dairy No, Document Name, or Year to search.",
       });
     }
 
-    // =================================
-    // BUILD MONGODB QUERY
-    // =================================
+    // =============================================
+    // BUILD QUERY
+    // =============================================
     const query = {};
 
-    // =================================
+    // =============================================
     // DAIRY NUMBER
-    // =================================
+    // =============================================
     if (cleanDairyNo) {
       query.dairyNo = cleanDairyNo;
     }
 
-    // =================================
+    // =============================================
     // DOCUMENT NAME
-    // =================================
+    // =============================================
     if (cleanDocumentName) {
       query.documentName = {
         $regex: `^${escapeRegex(cleanDocumentName)}$`,
@@ -224,12 +293,14 @@ const searchRecord = async (req, res) => {
       };
     }
 
-    // =================================
+    // =============================================
     // YEAR
-    // =================================
+    // =============================================
     if (cleanYear) {
       const selectedYear = Number(cleanYear);
 
+      // Allow all valid four-digit years,
+      // including years before 2000.
       if (
         !Number.isInteger(selectedYear) ||
         selectedYear < 1 ||
@@ -252,9 +323,9 @@ const searchRecord = async (req, res) => {
       };
     }
 
-    // =================================
+    // =============================================
     // FIND RECORDS
-    // =================================
+    // =============================================
     const records = await Record.find(query)
       .populate("uploadedBy", "username")
       .sort({
@@ -262,9 +333,9 @@ const searchRecord = async (req, res) => {
         dairyNo: 1,
       });
 
-    // =================================
+    // =============================================
     // NO RECORDS
-    // =================================
+    // =============================================
     if (!records || records.length === 0) {
       return res.status(404).json({
         message: "No matching records found.",
@@ -272,9 +343,9 @@ const searchRecord = async (req, res) => {
       });
     }
 
-    // =================================
+    // =============================================
     // SUCCESS
-    // =================================
+    // =============================================
     return res.status(200).json({
       message: `${records.length} record(s) found successfully.`,
       count: records.length,
@@ -290,18 +361,9 @@ const searchRecord = async (req, res) => {
   }
 };
 
-// =================================
+// =============================================
 // GET AVAILABLE YEARS
-//
-// Returns only years that actually
-// exist in the Record collection.
-//
-// Example:
-//
-// {
-//   "years": [2026, 2025, 2000, 1999, 1987]
-// }
-// =================================
+// =============================================
 const getAvailableYears = async (req, res) => {
   try {
     const records = await Record.find(
@@ -311,9 +373,9 @@ const getAvailableYears = async (req, res) => {
       },
     ).lean();
 
-    // =================================
-    // Extract unique years
-    // =================================
+    // =============================================
+    // EXTRACT UNIQUE YEARS
+    // =============================================
     const yearsSet = new Set();
 
     records.forEach((record) => {
@@ -326,12 +388,15 @@ const getAvailableYears = async (req, res) => {
       }
     });
 
-    // =================================
-    // Convert Set to Array
-    // Newest year first
-    // =================================
+    // =============================================
+    // SORT YEARS
+    // NEWEST FIRST
+    // =============================================
     const years = Array.from(yearsSet).sort((a, b) => b - a);
 
+    // =============================================
+    // RESPONSE
+    // =============================================
     return res.status(200).json({
       message: "Available years retrieved successfully.",
       years,
@@ -346,16 +411,16 @@ const getAvailableYears = async (req, res) => {
   }
 };
 
-// =================================
+// =============================================
 // ESCAPE REGEX
-// =================================
+// =============================================
 const escapeRegex = (string) => {
   return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 };
 
-// =================================
+// =============================================
 // SANITIZE FILE NAME
-// =================================
+// =============================================
 const sanitizeFileName = (fileName) => {
   return fileName
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, "_")
@@ -364,16 +429,16 @@ const sanitizeFileName = (fileName) => {
     .substring(0, 200);
 };
 
-// =================================
+// =============================================
 // DOWNLOAD DOCUMENT
-// =================================
+// =============================================
 const downloadDocument = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // =================================
+    // =============================================
     // FIND RECORD
-    // =================================
+    // =============================================
     const record = await Record.findById(id);
 
     if (!record) {
@@ -382,126 +447,116 @@ const downloadDocument = async (req, res) => {
       });
     }
 
-    // =================================
-    // CHECK CLOUDINARY URL
-    // =================================
-    if (!record.documentUrl) {
+    // =============================================
+    // CHECK CLOUDINARY PUBLIC ID
+    // =============================================
+    if (!record.cloudinaryPublicId) {
       return res.status(404).json({
-        message: "Document URL not found.",
+        message: "Cloudinary document ID not found.",
       });
     }
 
-    console.log("Starting document download:", {
-      recordId: record._id.toString(),
-      fileName: record.originalFileName,
-      documentUrl: record.documentUrl,
-      resourceType: record.cloudinaryResourceType,
-    });
-
-    // =================================
-    // REQUEST FILE FROM CLOUDINARY
-    // =================================
-    const cloudinaryResponse = await axios.get(record.documentUrl, {
-      responseType: "stream",
-      timeout: 120000,
-      maxRedirects: 5,
-      validateStatus: (status) => status >= 200 && status < 300,
-    });
-
-    // =================================
-    // FILE NAME
-    // =================================
+    // =============================================
+    // FILE INFORMATION
+    // =============================================
     const safeFileName = sanitizeFileName(
       record.originalFileName || "document",
     );
 
-    // =================================
-    // CONTENT TYPE
-    // =================================
-    const contentType =
-      record.documentType ||
-      cloudinaryResponse.headers["content-type"] ||
-      "application/octet-stream";
+    const contentType = record.documentType || "application/octet-stream";
 
+    const resourceType = record.cloudinaryResourceType || "raw";
+
+    // =============================================
+    // GENERATE CLOUDINARY DELIVERY URL
+    // =============================================
+    //
+    // IMPORTANT:
+    //
+    // Cloudinary has different delivery paths:
+    //
+    // image -> /image/upload/
+    // video -> /video/upload/
+    // raw   -> /raw/upload/
+    //
+    // This is the key difference between
+    // images and files such as:
+    //
+    // PDF
+    // DOC
+    // DOCX
+    // XLS
+    // XLSX
+    // PPT
+    // PPTX
+    // ZIP
+    // RAR
+    // 7Z
+    // TXT
+    // RTF
+    //
+    const downloadUrl = cloudinary.url(record.cloudinaryPublicId, {
+      resource_type: resourceType,
+
+      type: "upload",
+
+      secure: true,
+
+      // Force browser download
+      flags: "attachment",
+
+      // Keep original extension when
+      // Cloudinary URL needs it.
+      format: record.fileExtension
+        ? record.fileExtension.replace(".", "")
+        : undefined,
+    });
+
+    console.log("Generated Cloudinary Download URL:", {
+      recordId: record._id.toString(),
+
+      fileName: record.originalFileName,
+
+      mimeType: record.documentType,
+
+      extension: record.fileExtension,
+
+      resourceType,
+
+      publicId: record.cloudinaryPublicId,
+
+      downloadUrl,
+    });
+
+    // =============================================
+    // SET RESPONSE HEADERS
+    // =============================================
     res.setHeader("Content-Type", contentType);
 
-    // =================================
-    // FORCE DOWNLOAD
-    // =================================
     res.setHeader(
       "Content-Disposition",
       `attachment; filename="${safeFileName}"`,
     );
 
-    // =================================
-    // CONTENT LENGTH
-    // =================================
-    const contentLength = cloudinaryResponse.headers["content-length"];
-
-    if (contentLength) {
-      res.setHeader("Content-Length", contentLength);
-    }
-
-    // =================================
-    // CACHE CONTROL
-    // =================================
     res.setHeader(
       "Cache-Control",
       "private, no-cache, no-store, must-revalidate",
     );
 
-    // =================================
-    // STREAM CLOUDINARY → BROWSER
-    // =================================
-    cloudinaryResponse.data.on("error", (streamError) => {
-      console.error("Cloudinary Stream Error:", streamError);
-
-      if (!res.headersSent) {
-        return res.status(500).json({
-          message: "Error while streaming document.",
-        });
-      }
-
-      res.destroy(streamError);
-    });
-
-    cloudinaryResponse.data.pipe(res);
+    // =============================================
+    // REDIRECT TO CLOUDINARY
+    // =============================================
+    //
+    // Browser will download the file directly
+    // from Cloudinary.
+    //
+    return res.redirect(downloadUrl);
   } catch (error) {
     console.error("Download Document Error:", error);
 
-    // =================================
-    // CLOUDINARY / AXIOS ERROR
-    // =================================
-    if (error.response) {
-      console.error("Cloudinary Status:", error.response.status);
-
-      console.error("Cloudinary Headers:", error.response.headers);
-
-      if (!res.headersSent) {
-        return res.status(error.response.status || 500).json({
-          message: "Unable to retrieve document from Cloudinary.",
-        });
-      }
-
-      return;
-    }
-
-    // =================================
-    // TIMEOUT
-    // =================================
-    if (error.code === "ECONNABORTED") {
-      if (!res.headersSent) {
-        return res.status(504).json({
-          message: "Document download timed out.",
-        });
-      }
-
-      return;
-    }
-
-    // =================================
+    // =============================================
     // GENERAL ERROR
-    // =================================
+    // =============================================
     if (!res.headersSent) {
       return res.status(500).json({
         message: "Server error while downloading document.",
@@ -510,9 +565,9 @@ const downloadDocument = async (req, res) => {
   }
 };
 
-// =================================
+// =============================================
 // EXPORT
-// =================================
+// =============================================
 module.exports = {
   submitRecord,
   searchRecord,

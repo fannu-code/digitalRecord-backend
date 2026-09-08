@@ -47,6 +47,11 @@ const recordSchema = new mongoose.Schema(
       required: true,
     },
 
+    fileExtension: {
+      type: String,
+      required: true,
+    },
+
     uploadedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
