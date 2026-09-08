@@ -387,7 +387,9 @@ const downloadDocument = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Find the record.
+    // =================================
+    // FIND RECORD
+    // =================================
     const record = await Record.findById(id);
 
     if (!record) {
@@ -396,42 +398,50 @@ const downloadDocument = async (req, res) => {
       });
     }
 
-    if (!record.documentUrl) {
+    if (!record.cloudinaryPublicId) {
       return res.status(404).json({
-        message: "Document URL not found.",
+        message: "Cloudinary document not found.",
       });
     }
 
-    /*
-     * Request the Cloudinary file as a stream.
-     *
-     * This allows us to control the response sent
-     * back to the browser.
-     */
+    // =================================
+    // CREATE CLOUDINARY DOWNLOAD URL
+    // =================================
+    const resourceType = record.cloudinaryResourceType || "raw";
+
+    const downloadUrl = cloudinary.url(record.cloudinaryPublicId, {
+      resource_type: resourceType,
+      secure: true,
+      flags: "attachment",
+      attachment: record.originalFileName || "document",
+    });
+
+    console.log("Cloudinary Download URL:", downloadUrl);
+
+    // =================================
+    // GET FILE FROM CLOUDINARY
+    // =================================
     const cloudinaryResponse = await axios({
       method: "GET",
-      url: record.documentUrl,
+      url: downloadUrl,
       responseType: "stream",
       timeout: 120000,
       maxRedirects: 5,
     });
 
-    /*
-     * Use the original MIME type saved during upload.
-     */
-    if (record.documentType) {
-      res.setHeader("Content-Type", record.documentType);
-    } else if (cloudinaryResponse.headers["content-type"]) {
-      res.setHeader("Content-Type", cloudinaryResponse.headers["content-type"]);
-    } else {
-      res.setHeader("Content-Type", "application/octet-stream");
-    }
+    // =================================
+    // CONTENT TYPE
+    // =================================
+    res.setHeader(
+      "Content-Type",
+      record.documentType ||
+        cloudinaryResponse.headers["content-type"] ||
+        "application/octet-stream",
+    );
 
-    /*
-     * Force browser download.
-     *
-     * The filename comes from the original uploaded file.
-     */
+    // =================================
+    // FILE NAME
+    // =================================
     const safeFileName = sanitizeFileName(
       record.originalFileName || "document",
     );
@@ -441,10 +451,9 @@ const downloadDocument = async (req, res) => {
       `attachment; filename="${safeFileName}"`,
     );
 
-    /*
-     * If Cloudinary provides content length,
-     * forward it to the browser.
-     */
+    // =================================
+    // CONTENT LENGTH
+    // =================================
     if (cloudinaryResponse.headers["content-length"]) {
       res.setHeader(
         "Content-Length",
@@ -452,17 +461,17 @@ const downloadDocument = async (req, res) => {
       );
     }
 
-    /*
-     * Prevent caching of protected downloads.
-     */
+    // =================================
+    // CACHE CONTROL
+    // =================================
     res.setHeader(
       "Cache-Control",
       "private, no-cache, no-store, must-revalidate",
     );
 
-    /*
-     * Stream Cloudinary → Express → Browser.
-     */
+    // =================================
+    // STREAM TO BROWSER
+    // =================================
     cloudinaryResponse.data.on("error", (streamError) => {
       console.error("Cloudinary Download Stream Error:", streamError);
 
@@ -479,14 +488,13 @@ const downloadDocument = async (req, res) => {
   } catch (error) {
     console.error("Download Document Error:", error);
 
-    /*
-     * Cloudinary/axios errors.
-     */
     if (error.response) {
-      console.error("Cloudinary Response Status:", error.response.status);
+      console.error("Cloudinary Status:", error.response.status);
+
+      console.error("Cloudinary Headers:", error.response.headers);
 
       if (!res.headersSent) {
-        return res.status(404).json({
+        return res.status(error.response.status).json({
           message: "Unable to retrieve the document from Cloudinary.",
         });
       }
