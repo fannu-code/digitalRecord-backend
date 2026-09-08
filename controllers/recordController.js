@@ -353,6 +353,17 @@ const escapeRegex = (string) => {
   return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 };
 
+// =================================
+// SANITIZE FILE NAME
+// =================================
+const sanitizeFileName = (fileName) => {
+  return fileName
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+    .substring(0, 200);
+};
+
 /**
  * DOWNLOAD DOCUMENT
  *
